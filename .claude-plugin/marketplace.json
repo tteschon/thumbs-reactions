@@ -1,0 +1,6 @@
+{
+  "name": "thumbs-reactions",
+  "description": "Thumbs up / thumbs down quick-reply buttons for Claude Code.",
+  "owner": { "name": "tteschon" },
+  "plugins": [{ "name": "thumbs-reactions", "source": "./" }]
+}
