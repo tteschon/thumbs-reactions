@@ -5,6 +5,7 @@ import type { LatestReply } from '../types'
 
 export const THUMBS_UP = '👍 Looks good, continue'
 export const THUMBS_DOWN = "👎 That's not right — try another approach"
+export const RETRY = '🔁 Try that again'
 
 const latest = atom(
   { plugin: 'thumbs-reactions', key: 'latest' } as const,
@@ -19,11 +20,8 @@ const safely = (p: Promise<unknown>) => p.catch(() => undefined)
 
 export const register: Register = on => {
   // Main loop only: a subagent's turns and rows never move the buttons.
-  on('prompt.submit', async ($, e, next) => {
-    await safely(update($, isBusy, () => true))
-    return next(e)
-  })
-
+  // Busy follows model turns alone, so a slash command or a dropped prompt
+  // that starts no turn never leaves the buttons hidden.
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) await safely(update($, isBusy, () => true))
     return next(e)
@@ -63,8 +61,12 @@ export const register: Register = on => {
     const { Box, Button } = $.ui.resolve(e)
     const react = (text: string) => async () => {
       // Hide the buttons first so a double press cannot queue two turns.
-      await update($, isBusy, () => true)
-      void $.prompt.submit({ text })
+      await safely(update($, isBusy, () => true))
+      const sent = await $.prompt.submit({ text }).catch(() => undefined)
+      // Nothing started a turn (refused or dropped): show the buttons again.
+      if (sent === undefined || sent.drop !== undefined) {
+        await safely(update($, isBusy, () => false))
+      }
     }
 
     return (
@@ -73,6 +75,7 @@ export const register: Register = on => {
         <Box flexDirection="row" gap={1}>
           <Button key="thumbs-up" label="👍" onPress={react(THUMBS_UP)} />
           <Button key="thumbs-down" label="👎" onPress={react(THUMBS_DOWN)} />
+          <Button key="retry" label="🔁" onPress={react(RETRY)} />
         </Box>
       </Box>
     )

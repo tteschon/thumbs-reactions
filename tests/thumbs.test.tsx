@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import { THUMBS_DOWN, THUMBS_UP } from '../hooks/register'
+import { RETRY, THUMBS_DOWN, THUMBS_UP } from '../hooks/register'
 
 const message = (text: string) => ({
   message: {
@@ -54,7 +54,7 @@ test('buttons show under the latest reply once the turn ends, on every surface',
 
   for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
     const latest = await $.ui.mount(reply('new', 'New reply', surface))
-    expect(await latest.findAll({ type: 'Button' })).toHaveLength(2)
+    expect(await latest.findAll({ type: 'Button' })).toHaveLength(3)
     await latest.unmount()
 
     const older = await $.ui.mount(reply('old', 'Old reply', surface))
@@ -71,16 +71,22 @@ test('matches the latest reply by its text when the ids differ', async ($, on) =
   await $.turn.complete(turnEnd())
 
   const ui = await $.ui.mount(reply('other-id', 'Done. All set'))
-  expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(3)
   await ui.unmount()
+})
+
+const turnStart = (agentId?: string) => ({
+  text: 'go',
+  turnId: 't',
+  ...(agentId === undefined ? {} : { agentId }),
 })
 
 test('no buttons while Claude is working', async ($, on) => {
   engine(on)
-  on('prompt.submit', (_, e) => ({ text: e.text }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
 
   await $.session.append({ ...message('Working on it'), uuid: 'a' })
-  await $.prompt.submit(typed('next thing'))
+  await $.turn.start(turnStart())
 
   const ui = await $.ui.mount(reply('a', 'Working on it'))
   expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
@@ -89,11 +95,12 @@ test('no buttons while Claude is working', async ($, on) => {
 
 test('a subagent finishing does not show the buttons mid-turn', async ($, on) => {
   engine(on)
-  on('prompt.submit', (_, e) => ({ text: e.text }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
 
   await $.session.append({ ...message('Main reply'), uuid: 'm' })
-  await $.prompt.submit(typed('go'))
+  await $.turn.start(turnStart())
+  await $.turn.start(turnStart('sub-1'))
   await $.turn.complete(turnEnd('sub-1'))
 
   const ui = await $.ui.mount(reply('m', 'Main reply'))
@@ -118,11 +125,11 @@ test('a tool-only row does not take the buttons', async ($, on) => {
   await $.turn.complete(turnEnd())
 
   const ui = await $.ui.mount(reply('text', 'Here is the answer'))
-  expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(3)
   await ui.unmount()
 })
 
-test('pressing a thumb sends the reply and hides the buttons', async ($, on) => {
+test('pressing a button sends the reply and hides the buttons', async ($, on) => {
   const sent: string[] = []
   engine(on)
   on('turn.complete', () => ({ text: '' }))
@@ -134,6 +141,7 @@ test('pressing a thumb sends the reply and hides the buttons', async ($, on) => 
   for (const [key, text] of [
     ['thumbs-up', THUMBS_UP],
     ['thumbs-down', THUMBS_DOWN],
+    ['retry', RETRY],
   ] as const) {
     await $.session.append({ ...message(`Reply for ${key}`), uuid: key })
     await $.turn.complete(turnEnd())
@@ -144,4 +152,32 @@ test('pressing a thumb sends the reply and hides the buttons', async ($, on) => 
     expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
     await ui.unmount()
   }
+})
+
+test('a slash command that starts no turn leaves the buttons up', async ($, on) => {
+  engine(on)
+  on('prompt.submit', (_, e) => ({ text: e.text }))
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.append({ ...message('Reply'), uuid: 'r' })
+  await $.turn.complete(turnEnd())
+  await $.prompt.submit(typed('/clear-screen'))
+
+  const ui = await $.ui.mount(reply('r', 'Reply'))
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(3)
+  await ui.unmount()
+})
+
+test('a press whose prompt is dropped shows the buttons again', async ($, on) => {
+  engine(on)
+  on('turn.complete', () => ({ text: '' }))
+  on('prompt.submit', () => ({ drop: 'refused' }))
+
+  await $.session.append({ ...message('Reply'), uuid: 'r' })
+  await $.turn.complete(turnEnd())
+
+  const ui = await $.ui.mount(reply('r', 'Reply'))
+  await ui.press({ key: 'thumbs-up' })
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(3)
+  await ui.unmount()
 })

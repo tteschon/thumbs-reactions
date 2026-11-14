@@ -1,13 +1,14 @@
 # thumbs-reactions
 
-A Claude Code mod that puts 👍 and 👎 buttons under Claude's latest reply, so you can answer with one click instead of typing.
+A Claude Code mod that puts 👍, 👎 and 🔁 buttons under Claude's latest reply, so you can answer with one click instead of typing.
 
 - **👍** sends `👍 Looks good, continue`
 - **👎** sends `👎 That's not right — try another approach`
+- **🔁** sends `🔁 Try that again`
 
 The buttons appear only once Claude has finished replying, and only under the most recent reply. They stay hidden while Claude (or a subagent) is still working, and disappear as soon as you press one, so a double click can't send twice. Claude reads your reaction like any other message you type.
 
-To change what each button sends, edit `THUMBS_UP` and `THUMBS_DOWN` at the top of `hooks/register.tsx`.
+To change what each button sends, edit `THUMBS_UP`, `THUMBS_DOWN` and `RETRY` at the top of `hooks/register.tsx`.
 
 ## Install
 
