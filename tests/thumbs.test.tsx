@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
-import { RETRY, THUMBS_DOWN, THUMBS_UP } from '../hooks/register'
+import { MEANING, RETRY, THUMBS_DOWN, THUMBS_UP } from '../hooks/register'
 
 const message = (text: string) => ({
   message: {
@@ -63,7 +63,7 @@ test('buttons show under the latest reply once the turn ends, on every surface',
   }
 })
 
-test('matches the latest reply by its text when the ids differ', async ($, on) => {
+test('an older reply with the same words gets no buttons', async ($, on) => {
   engine(on)
   on('turn.complete', () => ({ text: '' }))
 
@@ -71,7 +71,7 @@ test('matches the latest reply by its text when the ids differ', async ($, on) =
   await $.turn.complete(turnEnd())
 
   const ui = await $.ui.mount(reply('other-id', 'Done. All set'))
-  expect(await ui.findAll({ type: 'Button' })).toHaveLength(3)
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
   await ui.unmount()
 })
 
@@ -180,4 +180,30 @@ test('a press whose prompt is dropped shows the buttons again', async ($, on) =>
   await ui.press({ key: 'thumbs-up' })
   expect(await ui.findAll({ type: 'Button' })).toHaveLength(3)
   await ui.unmount()
+})
+
+const compose = (surfaces: readonly ('terminal' | 'desktop' | 'vscode' | 'mobile')[]) => ({
+  model: 'claude-opus-5-5',
+  promptModel: 'claude-opus-5-5',
+  surfaces,
+  tools: [],
+  outputStyle: null,
+  traits: [],
+})
+
+test("Claude is told what each button means where buttons are drawn", async ($, on) => {
+  on('prompt.compose', () => ({
+    sections: [{ id: 'intro', text: 'engine', scope: 'shared' as const }],
+  }))
+
+  const drawn = await $.prompt.compose(compose(['desktop']))
+  expect(drawn.sections.at(-1)).toEqual({
+    id: 'thumbs-reactions:meaning',
+    text: MEANING,
+    scope: 'session',
+  })
+  for (const text of [THUMBS_UP, THUMBS_DOWN, RETRY]) expect(MEANING).toContain(text)
+
+  const headless = await $.prompt.compose(compose([]))
+  expect(headless.sections).toHaveLength(1)
 })

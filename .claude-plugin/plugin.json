@@ -1,6 +1,6 @@
 {
   "name": "thumbs-reactions",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Thumbs up / thumbs down buttons under Claude's latest reply that send a quick response.",
   "author": { "name": "tteschon" },
   "license": "MIT",
