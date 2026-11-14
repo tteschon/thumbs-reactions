@@ -12,11 +12,11 @@ Slash commands (run as if you typed them):
 
 - **🧹** runs `/clear`. It asks first, with ✓ / ✕, so a stray click can't wipe the conversation.
 - **🗜️** runs `/compact`.
-- **🔍** runs `/code-review`. It shows only when there is something to review: the reply edited a file, or git shows uncommitted changes.
+- **🔍** runs `/code-review`. It shows only when there is something to review: the reply edited a file, or git shows uncommitted changes that 🔍 hasn't reviewed yet.
 
 A command button shows only where the session can run that command. If a command fails to run, a toast says so.
 
-Known limitation: the mod finds Claude's latest reply by its words, because the ID a surface gives a drawn reply differs from the stored one. An older reply with exactly the same words (a bare "Done.") gets buttons too.
+The mod finds Claude's latest reply by its words, because the ID a surface gives a drawn reply differs from the stored one. An older reply with the same words is told apart by having been drawn before the latest reply's turn began; right after the mod reloads it can't tell yet, so for one reply an older one with exactly the same words (a bare "Done.") may get buttons too.
 
 The buttons appear only once Claude has finished replying, and only under the most recent reply. They stay hidden while Claude is working on a reply (including subagents it runs as part of that reply), and disappear as soon as you press one, so a double click can't send twice.
 

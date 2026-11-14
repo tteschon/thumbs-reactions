@@ -397,3 +397,90 @@ test('a reply with several text blocks takes the buttons on its last block', asy
   expect(await keys(last)).toContain('thumbs-up')
   await last.unmount()
 })
+
+test('an older reply with the same words, drawn before this turn, gets no buttons', async ($, on) => {
+  engine(on)
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.turn.start(turnStart())
+  await $.session.append({ ...message('Done.'), uuid: 'a' })
+  await $.turn.complete(turnEnd())
+  const older = await $.ui.mount(reply('msg_a-t0', 'Done.'))
+  expect(await keys(older)).toContain('thumbs-up')
+
+  await $.turn.start(turnStart())
+  await $.session.append({ ...message('Done.'), uuid: 'b' })
+  await $.turn.complete(turnEnd())
+
+  expect(await keys(older)).toEqual([])
+  await older.unmount()
+  const newer = await $.ui.mount(reply('msg_b-t0', 'Done.'))
+  expect(await keys(newer)).toContain('thumbs-up')
+  await newer.unmount()
+})
+
+test('a session start brings back buttons a killed turn left hidden', async ($, on) => {
+  engine(on)
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+
+  await $.session.append({ ...message('Reply'), uuid: 'r' })
+  await $.turn.start(turnStart())
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const ui = await $.ui.mount(reply('r', 'Reply'))
+  expect(await keys(ui)).toContain('thumbs-up')
+  await ui.unmount()
+})
+
+test('after /clear the old reply loses its buttons', async ($, on) => {
+  engine(on)
+  on('turn.complete', () => ({ text: '' }))
+  on('command.run', () => ({ text: '' }))
+
+  await $.session.append({ ...message('Reply'), uuid: 'r' })
+  await $.turn.complete(turnEnd())
+  const ui = await $.ui.mount(reply('r', 'Reply'))
+  await ui.press({ key: 'clear' })
+  await ui.press({ key: 'clear-yes' })
+
+  expect(await keys(ui)).toEqual([])
+  await ui.unmount()
+})
+
+test('🔍 hides after a review until the changes move on', async ($, on) => {
+  let fingerprint = 'h1'
+  const ok = (stdout: string) => ({
+    value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  })
+  engine(on)
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('command.run', () => ({ text: '' }))
+  on('process.run', (_, e) =>
+    e.argv[1] === 'status' ? ok(' M a.ts\n') : e.argv[1] === 'diff' ? ok('diff') : ok(`${fingerprint}\n`),
+  )
+  const wait = () => new Promise(resolve => setTimeout(resolve, 20))
+  const turn = async (uuid: string) => {
+    await $.turn.start(turnStart())
+    await $.session.append({ ...message(`Reply ${uuid}`), uuid })
+    await $.turn.complete(turnEnd())
+    await wait()
+    return $.ui.mount(reply(`msg_${uuid}-t0`, `Reply ${uuid}`))
+  }
+
+  let ui = await turn('1')
+  expect(await keys(ui)).toContain('review')
+  await ui.press({ key: 'review' })
+  await ui.unmount()
+
+  ui = await turn('2')
+  expect(await keys(ui)).not.toContain('review')
+  await ui.unmount()
+
+  fingerprint = 'h2'
+  ui = await turn('3')
+  expect(await keys(ui)).toContain('review')
+  await ui.unmount()
+})

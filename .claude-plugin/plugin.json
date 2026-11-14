@@ -1,6 +1,6 @@
 {
   "name": "thumbs-reactions",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Reaction and slash-command buttons under Claude's latest reply: 👍 👎 🔁 and 🧹 🗜️ 🔍.",
   "author": { "name": "tteschon" },
   "license": "MIT",

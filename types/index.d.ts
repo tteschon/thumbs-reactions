@@ -12,6 +12,8 @@ declare module 'claude-code' {
       hasEdited: boolean
       /** Whether the 🧹 button is waiting for its ✓ / ✕. */
       isConfirmingClear: boolean
+      /** Fingerprint of the uncommitted changes the last 🔍 review read. */
+      reviewedChanges: string | null
     }
   }
 }

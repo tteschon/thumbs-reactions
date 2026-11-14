@@ -27,6 +27,10 @@ const isConfirmingClear = atom(
   { plugin: 'thumbs-reactions', key: 'isConfirmingClear' } as const,
   false,
 )
+const reviewedChanges = atom(
+  { plugin: 'thumbs-reactions', key: 'reviewedChanges' } as const,
+  null as string | null,
+)
 
 /** Slash-command buttons, after the reactions. */
 export const COMMANDS = [
@@ -34,7 +38,6 @@ export const COMMANDS = [
   { key: 'compact', label: '🗜️', command: 'compact', isConfirmed: false, isAfterEdits: false },
   { key: 'review', label: '🔍', command: 'code-review', isConfirmed: false, isAfterEdits: true },
 ] as const
-
 
 const norm = (s: string) => s.replace(/\s+/g, ' ').trim()
 
@@ -50,19 +53,29 @@ async function refreshCommands($: EngineInterface) {
   if (names !== null) await safely(update($, available, () => names))
 }
 
-/** True when the session's git working tree has uncommitted changes; null outside git. */
-async function hasUncommittedChanges($: EngineInterface) {
-  const status = await $.process
-    .run(['git', 'status', '--porcelain'], { timeoutMs: 5000 })
-    .catch(() => null)
+/**
+ * A short fingerprint of the working tree's uncommitted changes: '' when
+ * there are none, null outside git or when git fails.
+ */
+async function changesFingerprint($: EngineInterface) {
+  const run = (argv: string[], stdin?: string) =>
+    $.process
+      .run(argv, { timeoutMs: 5000, ...(stdin === undefined ? {} : { stdin }) })
+      .catch(() => null)
+  const status = await run(['git', 'status', '--porcelain'])
   if (status === null || status.exitCode !== 0) return null
-  return status.stdout.trim() !== ''
+  if (status.stdout.trim() === '') return ''
+  const diff = await run(['git', 'diff', 'HEAD'])
+  const hashed = await run(['git', 'hash-object', '--stdin'], status.stdout + (diff?.stdout ?? ''))
+  return hashed !== null && hashed.exitCode === 0 ? hashed.stdout.trim() : status.stdout
 }
 
 /** After a main turn: refresh the command list and whether 🔍 has work. */
 async function afterTurn($: EngineInterface) {
   await refreshCommands($)
-  if ((await hasUncommittedChanges($)) === true) {
+  const changes = await changesFingerprint($)
+  // Changes 🔍 already reviewed, unchanged since, give it no work.
+  if (changes !== null && changes !== '' && changes !== (await read($, reviewedChanges))) {
     await safely(update($, hasEdited, () => true))
   }
 }
@@ -78,9 +91,17 @@ async function noteEdit<R extends { deny?: unknown; isError?: boolean }>($: Engi
 export const register: Register = on => {
   // Counts main-loop turns, so a command press can tell whether it started one.
   let turnsStarted = 0
+  // The ids of drawn reply blocks, and those drawn before the current main
+  // turn began: a block drawn before it is an older reply, even when it has
+  // the latest reply's words. A reload starts both empty.
+  const drawn = new Set<string>()
+  let drawnBeforeTurn = new Set<string>()
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    // No turn is running at a start: nothing may stay hidden or half-asked.
+    await safely(update($, isBusy, () => false))
+    await safely(update($, isConfirmingClear, () => false))
     await refreshCommands($)
     return result
   })
@@ -91,6 +112,7 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       turnsStarted += 1
+      drawnBeforeTurn = new Set(drawn)
       await safely(update($, isBusy, () => true))
       await safely(update($, hasEdited, () => false))
       await safely(update($, isConfirmingClear, () => false))
@@ -109,8 +131,8 @@ export const register: Register = on => {
   })
 
   // 🔍 has work when the turn edited a file with an edit tool (a subagent's
-  // too), or when git shows uncommitted changes at the turn's end, which also
-  // catches edits made through a shell command.
+  // too), or when git shows uncommitted changes at the turn's end that 🔍 has
+  // not reviewed yet, which also catches edits made through a shell command.
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => noteEdit($, await next(e)))
   on('tool.call', { tool: 'Write' }, async ($, e, next) => noteEdit($, await next(e)))
   on('tool.call', { tool: 'NotebookEdit' }, async ($, e, next) => noteEdit($, await next(e)))
@@ -145,15 +167,17 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     if (e.props.isSummary) return next(e)
+    drawn.add(e.requestId)
 
     const last = await read($, latest)
     const busy = await read($, isBusy)
     // A surface's id for a drawn block is its own (the desktop's is the API
     // message id plus the block's index), never the stored row's, so the block
-    // is matched by its words. An older reply with the very same words (a
-    // bare "Done.") takes the buttons too.
+    // is matched by its words, and only if it was not drawn before this turn.
     const isLatest =
-      last !== null && (e.requestId === last.id || norm(e.props.text) === norm(last.text))
+      last !== null &&
+      (e.requestId === last.id ||
+        (norm(e.props.text) === norm(last.text) && !drawnBeforeTurn.has(e.requestId)))
 
     if (!isLatest || busy) return next(e)
 
@@ -169,9 +193,17 @@ export const register: Register = on => {
       const before = turnsStarted
       await safely(update($, isConfirmingClear, () => false))
       await safely(update($, isBusy, () => true))
-      await $.command.run({ command }).catch(() => {
-        $.ui.toast(`/${command} didn't run`)
-      })
+      // What a review is about to read, so 🔍 hides until the changes move on.
+      const reviewing = command === 'code-review' ? await changesFingerprint($) : null
+      const ran = await $.command.run({ command }).then(
+        () => true,
+        () => {
+          $.ui.toast(`/${command} didn't run`)
+          return false
+        },
+      )
+      if (ran && command === 'clear') await safely(update($, latest, () => null))
+      if (ran && reviewing !== null) await safely(update($, reviewedChanges, () => reviewing))
       // A command that started a model turn leaves busy to that turn's end.
       if (turnsStarted === before) await safely(update($, isBusy, () => false))
     }
