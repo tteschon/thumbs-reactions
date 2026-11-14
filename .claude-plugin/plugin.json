@@ -1,7 +1,7 @@
 {
   "name": "thumbs-reactions",
-  "version": "0.2.0",
-  "description": "Thumbs up / thumbs down buttons under Claude's latest reply that send a quick response.",
+  "version": "0.3.0",
+  "description": "Reaction and slash-command buttons under Claude's latest reply: 👍 👎 🔁 and 🧹 🗜️ 🔍.",
   "author": { "name": "tteschon" },
   "license": "MIT",
   "types": "./types/index.d.ts"

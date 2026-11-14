@@ -54,7 +54,7 @@ test('buttons show under the latest reply once the turn ends, on every surface',
 
   for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
     const latest = await $.ui.mount(reply('new', 'New reply', surface))
-    expect(await latest.findAll({ type: 'Button' })).toHaveLength(3)
+    expect(await latest.findAll({ type: 'Button' })).toHaveLength(5)
     await latest.unmount()
 
     const older = await $.ui.mount(reply('old', 'Old reply', surface))
@@ -63,15 +63,15 @@ test('buttons show under the latest reply once the turn ends, on every surface',
   }
 })
 
-test('an older reply with the same words gets no buttons', async ($, on) => {
+test("matches the latest reply by its words when the surface's id differs", async ($, on) => {
   engine(on)
   on('turn.complete', () => ({ text: '' }))
 
   await $.session.append({ ...message('Done.\n\nAll  set'), uuid: 'row-1' })
   await $.turn.complete(turnEnd())
 
-  const ui = await $.ui.mount(reply('other-id', 'Done. All set'))
-  expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
+  const ui = await $.ui.mount(reply('msg_01abc-t0', 'Done. All set'))
+  expect(await keys(ui)).toContain('thumbs-up')
   await ui.unmount()
 })
 
@@ -125,7 +125,7 @@ test('a tool-only row does not take the buttons', async ($, on) => {
   await $.turn.complete(turnEnd())
 
   const ui = await $.ui.mount(reply('text', 'Here is the answer'))
-  expect(await ui.findAll({ type: 'Button' })).toHaveLength(3)
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(5)
   await ui.unmount()
 })
 
@@ -164,7 +164,7 @@ test('a slash command that starts no turn leaves the buttons up', async ($, on) 
   await $.prompt.submit(typed('/clear-screen'))
 
   const ui = await $.ui.mount(reply('r', 'Reply'))
-  expect(await ui.findAll({ type: 'Button' })).toHaveLength(3)
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(5)
   await ui.unmount()
 })
 
@@ -178,7 +178,7 @@ test('a press whose prompt is dropped shows the buttons again', async ($, on) =>
 
   const ui = await $.ui.mount(reply('r', 'Reply'))
   await ui.press({ key: 'thumbs-up' })
-  expect(await ui.findAll({ type: 'Button' })).toHaveLength(3)
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(5)
   await ui.unmount()
 })
 
@@ -206,4 +206,194 @@ test("Claude is told what each button means where buttons are drawn", async ($, 
 
   const headless = await $.prompt.compose(compose([]))
   expect(headless.sections).toHaveLength(1)
+})
+
+// The test runner has timers; the module's lib (no DOM) does not declare them.
+declare function setTimeout(fn: (value?: unknown) => void, ms: number): unknown
+
+const SURFACES = ['terminal', 'desktop', 'vscode', 'mobile'] as const
+
+const keys = async (ui: { findAll: (q: { type: 'Button' }) => Promise<{ key?: string }[]> }) =>
+  (await ui.findAll({ type: 'Button' })).map(b => b.key)
+
+const commandsAre = (names: string[]) => () => ({
+  value: names.map(name => ({ name, description: '', source: 'builtin' as const })),
+})
+
+test('command buttons follow what the session can run', async ($, on) => {
+  engine(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.list', commandsAre(['clear', 'help']))
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.session.append({ ...message('Reply'), uuid: 'r' })
+  await $.turn.complete(turnEnd())
+
+  const ui = await $.ui.mount(reply('r', 'Reply'))
+  expect(await keys(ui)).toEqual(['thumbs-up', 'thumbs-down', 'retry', 'clear'])
+  await ui.unmount()
+})
+
+test('🔍 shows only under a reply whose turn edited a file', async ($, on) => {
+  engine(on)
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.call', () => ({ result: {} }))
+
+  await $.turn.start(turnStart())
+  await $.tool.call({ tool: 'Edit', file_path: '/a.ts', old_string: 'a', new_string: 'b' })
+  await $.session.append({ ...message('Edited'), uuid: 'e1' })
+  await $.turn.complete(turnEnd())
+
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(reply('e1', 'Edited', surface))
+    expect(await keys(ui)).toContain('review')
+    await ui.unmount()
+  }
+
+  await $.turn.start(turnStart())
+  await $.session.append({ ...message('Just talk'), uuid: 'e2' })
+  await $.turn.complete(turnEnd())
+
+  const ui = await $.ui.mount(reply('e2', 'Just talk'))
+  expect(await keys(ui)).not.toContain('review')
+  await ui.unmount()
+})
+
+test('🧹 asks first, and only ✓ runs /clear', async ($, on) => {
+  const ran: string[] = []
+  engine(on)
+  on('turn.complete', () => ({ text: '' }))
+  on('command.run', (_, e) => {
+    ran.push(e.command)
+    return { text: '' }
+  })
+
+  await $.session.append({ ...message('Reply'), uuid: 'r' })
+  await $.turn.complete(turnEnd())
+
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(reply('r', 'Reply', surface))
+    await ui.press({ key: 'clear' })
+    expect(await keys(ui)).toContain('clear-yes')
+    await ui.press({ key: 'clear-no' })
+    expect(await keys(ui)).toContain('clear')
+    await ui.unmount()
+  }
+  expect(ran).toEqual([])
+
+  const ui = await $.ui.mount(reply('r', 'Reply'))
+  await ui.press({ key: 'clear' })
+  await ui.press({ key: 'clear-yes' })
+  expect(ran).toEqual(['clear'])
+  await ui.unmount()
+})
+
+test('🗜️ runs /compact and the buttons come back when no turn starts', async ($, on) => {
+  const ran: string[] = []
+  engine(on)
+  on('turn.complete', () => ({ text: '' }))
+  on('command.run', (_, e) => {
+    ran.push(e.command)
+    return { text: '' }
+  })
+
+  await $.session.append({ ...message('Reply'), uuid: 'r' })
+  await $.turn.complete(turnEnd())
+  const ui = await $.ui.mount(reply('r', 'Reply'))
+
+  await ui.press({ key: 'compact' })
+  expect(ran).toEqual(['compact'])
+  expect(await keys(ui)).toContain('thumbs-up')
+  await ui.unmount()
+})
+
+test('🔍 also shows when git has uncommitted changes (a shell edit)', async ($, on) => {
+  engine(on)
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('command.list', commandsAre(['clear', 'compact', 'code-review']))
+  on('process.run', () => ({
+    value: { exitCode: 0, stdout: ' M a.ts\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  }))
+
+  await $.turn.start(turnStart())
+  await $.session.append({ ...message('Edited via Bash'), uuid: 'b' })
+  await $.turn.complete(turnEnd())
+  // The git check runs after the turn's end without holding it.
+  await new Promise(resolve => setTimeout(resolve, 20))
+
+  const ui = await $.ui.mount(reply('b', 'Edited via Bash'))
+  expect(await keys(ui)).toContain('review')
+  await ui.unmount()
+})
+
+test('a command that fails says so and brings the buttons back', async ($, on) => {
+  const toasts: string[] = []
+  engine(on)
+  on('turn.complete', () => ({ text: '' }))
+  on('command.run', () => {
+    throw new Error('unknown command')
+  })
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+
+  await $.session.append({ ...message('Reply'), uuid: 'r' })
+  await $.turn.complete(turnEnd())
+  const ui = await $.ui.mount(reply('r', 'Reply'))
+
+  await ui.press({ key: 'compact' })
+  expect(toasts).toEqual(["/compact didn't run"])
+  expect(await keys(ui)).toContain('thumbs-up')
+  await ui.unmount()
+})
+
+test('a command that starts a reply keeps the buttons hidden until it ends', async ($, on) => {
+  engine(on)
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('command.run', async () => {
+    await $.turn.start(turnStart())
+    return { text: '' }
+  })
+
+  await $.session.append({ ...message('Reply'), uuid: 'r' })
+  await $.turn.complete(turnEnd())
+  const ui = await $.ui.mount(reply('r', 'Reply'))
+
+  await ui.press({ key: 'compact' })
+  expect(await keys(ui)).toEqual([])
+
+  await $.turn.complete(turnEnd())
+  expect(await keys(ui)).toContain('thumbs-up')
+  await ui.unmount()
+})
+
+test('a reply with several text blocks takes the buttons on its last block', async ($, on) => {
+  engine(on)
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.append({
+    ...message(''),
+    message: {
+      type: 'assistant',
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'First part.' },
+        { type: 'text', text: 'Last part.' },
+      ],
+    },
+    uuid: 'multi',
+  })
+  await $.turn.complete(turnEnd())
+
+  const first = await $.ui.mount(reply('msg_01x-t0', 'First part.'))
+  expect(await keys(first)).toEqual([])
+  await first.unmount()
+  const last = await $.ui.mount(reply('msg_01x-t1', 'Last part.'))
+  expect(await keys(last)).toContain('thumbs-up')
+  await last.unmount()
 })
